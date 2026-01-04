@@ -14,7 +14,7 @@ app.add_middleware(
 )
 
 @app.get("/")
-def health():
+def root():
     return {"status": "API online"}
 
 @app.post("/send-history")
