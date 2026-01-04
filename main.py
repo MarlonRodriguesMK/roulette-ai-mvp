@@ -15,13 +15,13 @@ app.add_middleware(
 
 @app.get("/")
 def health():
-    return {"status": "API ONLINE"}
+    return {"status": "API online"}
 
 @app.post("/send-history")
 async def send_history(file: UploadFile = File(...)):
     data = process_image(file)
-    analysis = analyze_data(data)
-    return analysis
+    result = analyze_data(data)
+    return result
 
 @app.post("/manual-input")
 async def manual_input(numbers: list[int]):
