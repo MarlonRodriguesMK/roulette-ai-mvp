@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+python-multipart
+pydantic
+websockets
+opencv-python
+pytesseract
