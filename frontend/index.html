@@ -1,17 +1,30 @@
 <!DOCTYPE html>
-<html>
+<html lang="pt-BR">
 <head>
-    <meta charset="utf-8">
-    <title>Roulette AI Premium</title>
-    <link rel="stylesheet" href="css/style.css">
+  <meta charset="UTF-8"/>
+  <title>Roleta IA</title>
+  <link rel="stylesheet" href="css/app.css"/>
 </head>
 <body>
-    <h1>Roulette AI Dashboard Premium</h1>
-    <div id="live-roulette">Roleta ao vivo será exibida aqui</div>
-    <div id="history">Histórico interativo</div>
-    <div id="strategies">Estratégias e alertas</div>
-    <input type="file" id="ocr-upload">
-    <script src="js/app.js"></script>
-    <script src="js/ocr_input.js"></script>
+
+  <h1>Roleta IA Premium</h1>
+
+  <div class="card">
+    <h3>Histórico</h3>
+    <div id="history" class="history-grid"></div>
+  </div>
+
+  <div class="card">
+    <h3>Explicação da IA</h3>
+    <div id="explain"></div>
+  </div>
+
+  <div class="card">
+    <h3>OCR</h3>
+    <input type="file" id="ocrFile"/>
+    <button id="sendOCR">Enviar</button>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
 </body>
 </html>
