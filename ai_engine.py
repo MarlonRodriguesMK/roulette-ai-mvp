@@ -1,8 +1,17 @@
 # ===============================
-# ROULETTE AI ENGINE – PREMIUM v2
+# ROULETTE AI ENGINE – PREMIUM v3
 # ===============================
 
 from collections import Counter
+
+# ======================================================
+# CONFIGURAÇÕES DE CONTEXTO (AJUSTÁVEIS)
+# ======================================================
+MIN_ACTIVE_WINDOW = 20
+MAX_ACTIVE_WINDOW = 50
+
+DEFAULT_ACTIVE_WINDOW = 30
+DEFAULT_HISTORY_LIMIT = 300
 
 # ======================================================
 # MAPA FÍSICO REAL DA ROLETA EUROPEIA
@@ -21,6 +30,11 @@ RED_NUMBERS = {
 }
 
 # ======================================================
+# MEMÓRIA GLOBAL DO SISTEMA
+# ======================================================
+GLOBAL_HISTORY = []
+
+# ======================================================
 # CRIA OBJETO FÍSICO DO GIRO
 # ======================================================
 def build_spin_object(number):
@@ -29,6 +43,7 @@ def build_spin_object(number):
     return {
         "number": number,
         "wheel_index": idx,
+        "zone_id": idx // 6,
         "color": "red" if number in RED_NUMBERS else "black" if number != 0 else "green",
         "parity": "even" if number != 0 and number % 2 == 0 else "odd" if number != 0 else None,
         "neighbors": [
@@ -38,59 +53,100 @@ def build_spin_object(number):
     }
 
 # ======================================================
-# ZONAS FÍSICAS CONTÍNUAS (DINÂMICAS)
+# CONTROLE DE HISTÓRICO
 # ======================================================
-def calculate_physical_zones(history, zone_size=6):
+def add_to_history(spins, history_limit=DEFAULT_HISTORY_LIMIT):
+    for s in spins:
+        GLOBAL_HISTORY.append(s)
+        if len(GLOBAL_HISTORY) > history_limit:
+            GLOBAL_HISTORY.pop(0)
+
+def get_active_window(active_window):
+    active_window = max(
+        MIN_ACTIVE_WINDOW,
+        min(active_window, MAX_ACTIVE_WINDOW)
+    )
+    return GLOBAL_HISTORY[-active_window:]
+
+# ======================================================
+# ZONAS FÍSICAS CONTEXTUAIS (JANELA ATIVA)
+# ======================================================
+def calculate_physical_zones_context(active_spins):
+    zone_hits = Counter()
+    total = len(active_spins)
+
+    for s in active_spins:
+        zone_hits[s["zone_id"]] += 1
+
     zones = []
-    total_spins = len(history)
 
-    for i in range(0, len(ROULETTE_WHEEL), zone_size):
-        sector = ROULETTE_WHEEL[i:i + zone_size]
-        hits = sum(1 for n in history if n in sector)
+    for zone_id, hits in zone_hits.items():
+        percentage = round((hits / total) * 100, 2) if total else 0
 
-        percentage = round((hits / total_spins) * 100, 2) if total_spins else 0
+        if hits >= total * 0.35:
+            status = "🔥 Quente"
+            explanation = "Alta recorrência recente nesta região física da roleta"
+        elif hits <= total * 0.10:
+            status = "❄️ Fria"
+            explanation = "Baixa incidência recente nesta região física"
+        else:
+            status = "Neutra"
+            explanation = "Comportamento equilibrado no contexto atual"
 
         zones.append({
-            "numbers": sector,
+            "zone_id": zone_id,
             "hits": hits,
-            "percentage": percentage
+            "percentage": percentage,
+            "status": status,
+            "explanation": explanation
         })
-
-    if not zones:
-        return []
-
-    max_hits = max(z["hits"] for z in zones)
-    min_hits = min(z["hits"] for z in zones)
-
-    for z in zones:
-        if z["hits"] == max_hits and max_hits > 0:
-            z["status"] = "🔥 Quente"
-            z["explanation"] = "Zona com maior concentração de resultados recentes na roleta física"
-        elif z["hits"] == min_hits:
-            z["status"] = "❄️ Fria"
-            z["explanation"] = "Zona com baixa incidência recente, indicando possível ausência"
-        else:
-            z["status"] = "Neutra"
-            z["explanation"] = "Zona com comportamento estatisticamente equilibrado"
 
     return zones
 
 # ======================================================
-# VIZINHOS FÍSICOS COM PRESSÃO
+# VIZINHOS COM PRESSÃO (JANELA ATIVA)
 # ======================================================
-def calculate_neighbors(history):
+def calculate_neighbors_context(active_spins):
     pressure = Counter()
 
-    for num in history:
-        if num in ROULETTE_WHEEL:
-            idx = ROULETTE_WHEEL.index(num)
-            pressure[ROULETTE_WHEEL[(idx - 1) % len(ROULETTE_WHEEL)]] += 1
-            pressure[ROULETTE_WHEEL[(idx + 1) % len(ROULETTE_WHEEL)]] += 1
+    for s in active_spins:
+        for n in s["neighbors"]:
+            pressure[n] += 1
 
     return [
         {"number": n, "pressure": p}
         for n, p in pressure.most_common()
     ]
+
+# ======================================================
+# SEQUÊNCIAS E PUXADAS
+# ======================================================
+def analyze_sequences(active_spins):
+    sequences = []
+
+    for i in range(1, len(active_spins)):
+        prev = active_spins[i - 1]
+        curr = active_spins[i]
+
+        if curr["zone_id"] == prev["zone_id"]:
+            sequences.append({
+                "type": "zona_puxada",
+                "zone_id": curr["zone_id"]
+            })
+
+        if curr["number"] in prev["neighbors"]:
+            sequences.append({
+                "type": "vizinho_puxado",
+                "number": curr["number"]
+            })
+
+        if curr["color"] == prev["color"]:
+            sequences.append({
+                "type": "cor_repetida",
+                "color": curr["color"]
+            })
+
+    return sequences
 
 # ======================================================
 # CAVALOS (OPOSIÇÃO FÍSICA REAL)
@@ -110,49 +166,49 @@ def calculate_horses():
     return horses
 
 # ======================================================
-# MOTOR PRINCIPAL (COMPATÍVEL COM O FRONTEND)
+# MOTOR PRINCIPAL (COMPATÍVEL COM FRONTEND)
 # ======================================================
-def analyze_data(data):
+def analyze_data(data, active_window=DEFAULT_ACTIVE_WINDOW):
     if not data:
         return {
             "status": "no_data",
             "message": "Nenhum número recebido"
         }
 
-    # Limita histórico para evitar ruído excessivo
-    history = data[-80:]
+    valid_numbers = [n for n in data if n in ROULETTE_WHEEL]
+    spins = [build_spin_object(n) for n in valid_numbers]
 
-    spins = [build_spin_object(n) for n in history if n in ROULETTE_WHEEL]
-    count = Counter(history)
+    add_to_history(spins)
+
+    active_spins = get_active_window(active_window)
+    count = Counter([s["number"] for s in GLOBAL_HISTORY])
 
     analysis = {
         "status": "ok",
 
-        # Contagem simples (mantido)
+        # Histórico
+        "history_size": len(GLOBAL_HISTORY),
+        "active_window": len(active_spins),
+
+        # Mantido para frontend
         "numbers": dict(count),
+        "history": [s["number"] for s in active_spins],
 
-        # Histórico bruto (mantido)
-        "history": history,
+        # NOVAS ANÁLISES CONTEXTUAIS
+        "physical_zones": calculate_physical_zones_context(active_spins),
+        "neighbors": calculate_neighbors_context(active_spins),
+        "sequences": analyze_sequences(active_spins),
 
-        # Zonas físicas reais
-        "physical_zones": calculate_physical_zones(history),
-
-        # Vizinhos com pressão lateral
-        "neighbors": calculate_neighbors(history),
-
-        # Cavalos estruturais
+        # Estrutura mantida
         "horses": calculate_horses(),
 
-        # Estratégias explicativas
         "strategies": [
-            "Zonas físicas analisam regiões contínuas da roleta real",
-            "Zonas quentes indicam recorrência recente na mesma região física",
-            "Zonas frias indicam ausência prolongada na roda",
-            "Vizinhos mostram pressão lateral dos resultados",
-            "Cavalos representam oposição estrutural da roleta"
+            "Análise baseada na janela ativa da mesa",
+            "Eventos antigos servem apenas como contexto histórico",
+            "Zonas, vizinhos e sequências seguem a roleta física",
+            "A roleta muda rapidamente — foco no momento atual"
         ],
 
-        # Alertas informativos (pronto para expansão)
         "alerts": []
     }
 
