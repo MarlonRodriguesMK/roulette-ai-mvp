@@ -3,5 +3,7 @@ uvicorn
 python-multipart
 pydantic
 websockets
-opencv-python
+opencv-python-headless
 pytesseract
+Pillow
+numpy
