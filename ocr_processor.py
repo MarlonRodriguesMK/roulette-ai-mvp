@@ -5,37 +5,46 @@ import re
 from PIL import Image
 import io
 
-# Se necessário no Railway (normalmente não)
-# pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
-
-
+# ======================================================
+# 🔹 PRÉ-PROCESSAMENTO AVANÇADO
+# ======================================================
 def preprocess_image(image_bytes: bytes) -> np.ndarray:
-    """
-    Pré-processa a imagem para melhorar a leitura do OCR
-    """
     image = Image.open(io.BytesIO(image_bytes)).convert("L")
     img = np.array(image)
 
-    # Aumenta contraste
-    img = cv2.equalizeHist(img)
+    # 🔹 Aumenta resolução (prints costumam ser pequenos)
+    img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
 
-    # Binarização
-    _, img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # 🔹 Redução de ruído
+    img = cv2.GaussianBlur(img, (5, 5), 0)
 
-    # Remove ruído
+    # 🔹 Binarização adaptativa (melhor que OTSU para apps)
+    img = cv2.adaptiveThreshold(
+        img, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        11,
+        2
+    )
+
+    # 🔹 Dilatação leve para unir dígitos quebrados
     kernel = np.ones((2, 2), np.uint8)
-    img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel)
+    img = cv2.dilate(img, kernel, iterations=1)
 
     return img
 
 
+# ======================================================
+# 🔹 EXTRAÇÃO SEGURA DE NÚMEROS
+# ======================================================
 def extract_numbers(text: str) -> list[int]:
     """
-    Extrai apenas números válidos de roleta (0–36)
+    Extrai números válidos de roleta (0–36)
+    Remove duplicações absurdas do OCR
     """
     found = re.findall(r"\b\d{1,2}\b", text)
-    numbers = []
 
+    numbers = []
     for n in found:
         n = int(n)
         if 0 <= n <= 36:
@@ -44,15 +53,25 @@ def extract_numbers(text: str) -> list[int]:
     return numbers
 
 
+# ======================================================
+# 🔹 FUNÇÃO PRINCIPAL OCR
+# ======================================================
 def process_image(image_bytes: bytes) -> list[int]:
-    """
-    Função principal chamada pela API
-    """
     processed_img = preprocess_image(image_bytes)
 
-    config = "--psm 6 -c tessedit_char_whitelist=0123456789"
+    # 🔹 OCR otimizado para linhas de números
+    config = (
+        "--oem 3 "
+        "--psm 6 "
+        "-c tessedit_char_whitelist=0123456789"
+    )
+
     text = pytesseract.image_to_string(processed_img, config=config)
 
     numbers = extract_numbers(text)
+
+    # 🔹 Remove leituras irreais (ex: OCR lixo)
+    if len(numbers) < 3:
+        return []
 
     return numbers
