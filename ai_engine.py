@@ -100,7 +100,7 @@ def analyze_data(data):
         "history": data[-50:],  # últimos 50
 
         # Zonas físicas reais
-        "zones": calculate_physical_zones(data),
+        "physical_zones": calculate_physical_zones(data),
 
         # Vizinhos físicos
         "neighbors": calculate_neighbors(data),
