@@ -89,3 +89,14 @@ async def get_analysis():
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     await websocket.send_text("WebSocket connected")
+import os
+import uvicorn
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=port,
+        reload=False
+    )
