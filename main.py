@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, UploadFile, File, HTTPException
+from fastapi import FastAPI, WebSocket, UploadFile, File
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -7,9 +7,7 @@ from ocr_processor import process_image
 
 app = FastAPI()
 
-# ======================================================
-# 🔹 CORS (Lovable / Frontend)
-# ======================================================
+# CORS - necessário para Lovable/frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -19,74 +17,73 @@ app.add_middleware(
 )
 
 # ======================================================
-# 🔹 ROTA RAIZ (Railway / Healthcheck)
+# 🔹 ROTA RAIZ / HEALTHCHECK
 # ======================================================
 @app.get("/")
 async def root():
-    return {
-        "status": "online",
-        "service": "Roulette AI",
-        "version": "MVP"
-    }
+    return {"status": "online", "service": "Roulette AI", "version": "MVP"}
 
 # ======================================================
-# 🔹 INPUT MANUAL (Frontend)
+# 🔹 INPUT MANUAL – Número por vez (beta)
+# ======================================================
+history_store = []
+
+@app.post("/add-spin")
+async def add_spin(number: int, history_limit: int = 50):
+    if number < 0 or number > 36:
+        return JSONResponse(content={"status":"error","message":"Número inválido"})
+    
+    history_store.append(number)
+    if len(history_store) > history_limit:
+        history_store[:] = history_store[-history_limit:]
+    
+    analysis = analyze_data(history_store, history_limit=history_limit)
+    return JSONResponse(content=analysis)
+
+# ======================================================
+# 🔹 INPUT MULTIPLOS (linha histórica, opcional)
 # ======================================================
 @app.post("/manual-input")
-async def manual_input(numbers: list[int]):
-    if not numbers:
-        raise HTTPException(status_code=400, detail="Lista de números vazia")
-
-    analysis = analyze_data(numbers)
-    return JSONResponse(content={
-        "source": "manual",
-        "input": numbers,
-        "analysis": analysis
-    })
+async def manual_input(numbers: list[int], history_limit: int = 50):
+    for n in numbers:
+        if n < 0 or n > 36:
+            return JSONResponse(content={"status":"error","message":"Número inválido na lista"})
+    history_store.extend(numbers)
+    if len(history_store) > history_limit:
+        history_store[:] = history_store[-history_limit:]
+    analysis = analyze_data(history_store, history_limit=history_limit)
+    return JSONResponse(content=analysis)
 
 # ======================================================
-# 🔹 OCR – UPLOAD DE IMAGEM
+# 🔹 INPUT OCR – Upload de print (futuro)
 # ======================================================
 @app.post("/send-history")
-async def send_history(file: UploadFile = File(...)):
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Arquivo enviado não é uma imagem")
-
+async def send_history(file: UploadFile = File(...), history_limit: int = 50):
     image_bytes = await file.read()
+    numbers = process_image(image_bytes)
+    history_store.extend(numbers)
+    if len(history_store) > history_limit:
+        history_store[:] = history_store[-history_limit:]
+    analysis = analyze_data(history_store, history_limit=history_limit)
+    return JSONResponse(content=analysis)
 
-    extracted_numbers = process_image(image_bytes)
-
-    if not extracted_numbers:
-        return JSONResponse(
-            status_code=200,
-            content={
-                "source": "ocr",
-                "numbers_extracted": [],
-                "analysis": None,
-                "warning": "Nenhum número detectado na imagem"
-            }
-        )
-
-    analysis = analyze_data(extracted_numbers)
-
-    return JSONResponse(content={
-        "source": "ocr",
-        "numbers_extracted": extracted_numbers,
-        "analysis": analysis
-    })
+# ======================================================
+# 🔹 ESTRATÉGIAS PREMIUM (CEREJA DO BOLO)
+# ======================================================
+@app.post("/premium-strategies")
+async def premium_strategies(user_strategies: list[dict], history_limit: int = 50):
+    analysis = analyze_data(history_store, history_limit=history_limit, user_strategies=user_strategies)
+    return JSONResponse(content=analysis)
 
 # ======================================================
 # 🔹 STATUS / DEBUG
 # ======================================================
 @app.get("/get-analysis")
 async def get_analysis():
-    return {
-        "status": "online",
-        "message": "IA analysis endpoint ready"
-    }
+    return {"status":"online","message":"IA analysis endpoint ready","history_length":len(history_store)}
 
 # ======================================================
-# 🔹 WEBSOCKET (Futuro tempo real)
+# 🔹 WEBSOCKET (para uso futuro)
 # ======================================================
 @app.websocket("/subscribe")
 async def websocket_endpoint(websocket: WebSocket):
