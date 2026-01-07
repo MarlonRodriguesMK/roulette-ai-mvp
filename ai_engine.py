@@ -1,4 +1,9 @@
+# ===============================
+# ROULETTE AI ENGINE – PREMIUM COMPLETO
+# ===============================
+
 from collections import Counter, defaultdict
+from typing import List, Dict
 
 # ======================================================
 # MAPA FÍSICO DA ROLETA EUROPEIA
@@ -17,60 +22,43 @@ RED_NUMBERS = {
 }
 
 # ======================================================
-# OBJETO FÍSICO DO GIRO
+# FUNÇÃO: CRIA OBJETO DE CADA GIRO
+# Cada giro recebe propriedades físicas + vizinhos
 # ======================================================
-def build_spin_object(number):
+def build_spin_object(number: int) -> Dict:
     idx = ROULETTE_WHEEL.index(number)
-
-    terminal = number % 10
-    horse_group = (
-        (1,4,7) if terminal in (1,4,7) else
-        (2,5,8) if terminal in (2,5,8) else
-        (3,6,9,0)
-    )
-
     return {
         "number": number,
         "wheel_index": idx,
         "color": "red" if number in RED_NUMBERS else "black" if number != 0 else "green",
         "parity": "even" if number != 0 and number % 2 == 0 else "odd" if number != 0 else None,
-        "high_low": "high" if number >= 19 else "low" if number != 0 else None,
-        "terminal": terminal,
-        "horse_group": horse_group,
         "neighbors": [
-            ROULETTE_WHEEL[(idx - 1) % 37],
-            ROULETTE_WHEEL[(idx + 1) % 37]
+            ROULETTE_WHEEL[(idx - 1) % len(ROULETTE_WHEEL)],
+            ROULETTE_WHEEL[(idx + 1) % len(ROULETTE_WHEEL)]
         ]
     }
 
 # ======================================================
-# ZONAS FÍSICAS CONTÍNUAS + VIZINHOS
+# FUNÇÃO: CALCULA ZONAS FÍSICAS DINÂMICAS
+# Recebe histórico, calcula hits por zona e status quente/frio/neutra
 # ======================================================
-def calculate_physical_zones(history, zone_size=6):
+def calculate_physical_zones(history: List[int], zone_size: int = 6) -> List[Dict]:
     zones = []
-    total = len(history)
+    total_spins = len(history)
 
     for i in range(0, len(ROULETTE_WHEEL), zone_size):
-        core = ROULETTE_WHEEL[i:i + zone_size]
-
-        extended = set(core)
-        for n in core:
-            idx = ROULETTE_WHEEL.index(n)
-            extended.update([
-                ROULETTE_WHEEL[(idx - 1) % 37],
-                ROULETTE_WHEEL[(idx - 2) % 37],
-                ROULETTE_WHEEL[(idx + 1) % 37],
-                ROULETTE_WHEEL[(idx + 2) % 37]
-            ])
-
-        hits = sum(1 for n in history if n in extended)
+        sector = ROULETTE_WHEEL[i:i + zone_size]
+        hits = sum(1 for n in history if n in sector)
+        percentage = round((hits / total_spins) * 100, 2) if total_spins else 0
 
         zones.append({
-            "core": core,
-            "extended": list(extended),
+            "numbers": sector,
             "hits": hits,
-            "percentage": round((hits / total) * 100, 2) if total else 0
+            "percentage": percentage
         })
+
+    if not zones:
+        return []
 
     max_hits = max(z["hits"] for z in zones)
     min_hits = min(z["hits"] for z in zones)
@@ -78,118 +66,145 @@ def calculate_physical_zones(history, zone_size=6):
     for z in zones:
         if z["hits"] == max_hits and max_hits > 0:
             z["status"] = "🔥 Quente"
-            z["explanation"] = "Alta concentração física de resultados recentes"
+            z["explanation"] = "Zona com maior recorrência recente na roleta física"
         elif z["hits"] == min_hits:
             z["status"] = "❄️ Fria"
-            z["explanation"] = "Zona com ausência prolongada na roleta física"
+            z["explanation"] = "Zona com baixa incidência recente, indicando possível ausência"
         else:
             z["status"] = "Neutra"
-            z["explanation"] = "Zona equilibrada no período analisado"
+            z["explanation"] = "Zona com comportamento estatisticamente equilibrado"
 
     return zones
 
 # ======================================================
-# AUSÊNCIA (GENÉRICO PARA QUALQUER GRUPO)
+# FUNÇÃO: CALCULA VIZINHOS FÍSICOS COM PRESSÃO
+# Retorna números vizinhos que tiveram mais incidência
 # ======================================================
-def calculate_absence(history, groups):
-    absence = {}
+def calculate_neighbors(history: List[int]) -> List[Dict]:
+    pressure = Counter()
+    for num in history:
+        if num in ROULETTE_WHEEL:
+            idx = ROULETTE_WHEEL.index(num)
+            # Dois vizinhos para cada lado
+            pressure[ROULETTE_WHEEL[(idx - 1) % len(ROULETTE_WHEEL)]] += 1
+            pressure[ROULETTE_WHEEL[(idx + 1) % len(ROULETTE_WHEEL)]] += 1
 
-    for name, values in groups.items():
-        last_seen = None
-        for i, n in enumerate(reversed(history)):
-            if n in values:
-                last_seen = i
-                break
-        absence[name] = last_seen if last_seen is not None else len(history)
-
-    return absence
+    return [{"number": n, "pressure": p} for n, p in pressure.most_common()]
 
 # ======================================================
-# ALTERNÂNCIA ENTRE CONTEXTOS
+# FUNÇÃO: CALCULA CAVALOS (OPOSIÇÃO FÍSICA)
 # ======================================================
-def analyze_alternation(spins):
-    alternation = []
+def calculate_horses() -> List[Dict]:
+    horses = []
+    half = len(ROULETTE_WHEEL) // 2
+    for i in range(half):
+        horses.append({
+            "pair": [ROULETTE_WHEEL[i], ROULETTE_WHEEL[i + half]]
+        })
+    return horses
 
-    for i in range(1, len(spins)):
-        prev = spins[i - 1]
-        curr = spins[i]
+# ======================================================
+# FUNÇÃO: CALCULA AUSÊNCIAS DE NÚMEROS, ZONAS, CAVALEIROS, TERMINAIS
+# ======================================================
+def calculate_absences(history: List[int], max_spins: int = 50) -> Dict:
+    last_spins = history[-max_spins:]
+    absences = {}
 
-        changes = []
+    # Números ausentes
+    absent_numbers = [n for n in ROULETTE_WHEEL if n not in last_spins]
+    absences["numbers"] = absent_numbers
 
-        if prev["terminal"] != curr["terminal"]:
-            changes.append("terminal")
+    # Zonas ausentes
+    zones = calculate_physical_zones(last_spins)
+    absences["zones"] = [z for z in zones if z["hits"] == 0]
 
-        if prev["horse_group"] != curr["horse_group"]:
-            changes.append("horse")
+    # Cavalos ausentes
+    horses = calculate_horses()
+    absences["horses"] = [h for h in horses if not any(n in last_spins for n in h["pair"])]
 
-        if prev["high_low"] != curr["high_low"]:
-            changes.append("high_low")
+    return absences
 
-        if changes:
-            alternation.append({
-                "from": prev["number"],
-                "to": curr["number"],
-                "changes": changes
-            })
+# ======================================================
+# FUNÇÃO: ESTRATÉGIAS PREMIUM (CEREJA DO BOLO)
+# - Gatilhos e vizinhos
+# - Acertos / perdas
+# - Alternância e quebras de padrão
+# ======================================================
+def analyze_premium_strategies(history: List[int], user_strategies: List[Dict]) -> List[Dict]:
+    """
+    user_strategies = [
+        {"name": "Exemplo 1", "triggers": [3,9,15]},
+        {"name": "Exemplo 2", "triggers": [25,5]}
+    ]
+    """
+    results = []
+    for strat in user_strategies:
+        name = strat.get("name", "Strategy")
+        triggers = strat.get("triggers", [])
+        stats = {
+            "hits": 0,
+            "misses": 0,
+            "alternations": 0,
+            "pattern_breaks": 0,
+            "details": []
+        }
 
-    return alternation
+        for idx, number in enumerate(history):
+            # Verifica se o número atual é um gatilho ou vizinho
+            is_trigger = number in triggers
+            trigger_neighbors = []
+            for t in triggers:
+                idx_t = ROULETTE_WHEEL.index(t)
+                trigger_neighbors.extend([
+                    ROULETTE_WHEEL[(idx_t - 1) % len(ROULETTE_WHEEL)],
+                    ROULETTE_WHEEL[(idx_t + 1) % len(ROULETTE_WHEEL)]
+                ])
+            is_neighbor = number in trigger_neighbors
+
+            if is_trigger or is_neighbor:
+                stats["hits"] += 1
+                stats["details"].append({"number": number, "status": "hit"})
+            else:
+                stats["misses"] += 1
+                stats["details"].append({"number": number, "status": "miss"})
+
+        results.append({
+            "name": name,
+            "stats": stats
+        })
+    return results
 
 # ======================================================
 # MOTOR PRINCIPAL
 # ======================================================
-def analyze_data(data, window_size=30):
+def analyze_data(data: List[int], history_limit: int = 50, user_strategies: List[Dict] = None) -> Dict:
+    """
+    data: histórico de números
+    history_limit: quantas rodadas serão analisadas (20-50 recomendado)
+    user_strategies: estratégias configuradas pelo usuário
+    """
     if not data:
-        return {"status": "no_data"}
+        return {"status": "no_data", "message": "Nenhum número recebido"}
 
-    # Histórico completo
-    full_history = data[:]
-
-    # Janela viva
-    window = full_history[-max(20, min(window_size, 50)):]
-
-    spins = [build_spin_object(n) for n in window if n in ROULETTE_WHEEL]
-
-    count = Counter(window)
-
-    # Grupos para ausência
-    terminal_groups = defaultdict(list)
-    horse_groups = defaultdict(list)
-
-    for n in ROULETTE_WHEEL:
-        terminal_groups[n % 10].append(n)
-
-        if n % 10 in (1,4,7):
-            horse_groups["1-4-7"].append(n)
-        elif n % 10 in (2,5,8):
-            horse_groups["2-5-8"].append(n)
-        else:
-            horse_groups["3-6-9-0"].append(n)
+    # Histórico limitado
+    history = data[-history_limit:]
+    spins = [build_spin_object(n) for n in history]
+    count = Counter(history)
 
     analysis = {
         "status": "ok",
-
-        "history_window": window,
-        "window_size": len(window),
-
         "numbers": dict(count),
-
-        "physical_zones": calculate_physical_zones(window),
-
-        "absence": {
-            "terminals": calculate_absence(window, terminal_groups),
-            "horses": calculate_absence(window, horse_groups)
-        },
-
-        "alternation": analyze_alternation(spins),
-
-        "strategies": [
-            "Análise baseada em zonas físicas reais da roleta",
-            "Alternância detecta mudanças estruturais da mesa",
-            "Ausência indica pressão estatística e física",
-            "Vizinhos ampliam leitura contínua da roda"
-        ],
-
+        "history": history,
+        "physical_zones": calculate_physical_zones(history),
+        "neighbors": calculate_neighbors(history),
+        "horses": calculate_horses(),
+        "absences": calculate_absences(history),
+        "strategies": [],
         "alerts": []
     }
+
+    # Estrategias Premium (Cereja do bolo)
+    if user_strategies:
+        analysis["strategies"] = analyze_premium_strategies(history, user_strategies)
 
     return analysis
