@@ -3,6 +3,7 @@
 # ======================================================
 
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from typing import List
 import os
 
@@ -22,6 +23,18 @@ class Settings(BaseSettings):
         "http://localhost:5173",
         "https://your-frontend-domain.com"
     ]
+
+    @field_validator("ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def _parse_allowed_origins(cls, v):
+        """Aceita lista JSON ou string separada por vírgula no .env (Railway)."""
+        if v is None:
+            return v
+        if isinstance(v, str):
+            # Permite: "https://a.com,https://b.com"
+            parts = [p.strip() for p in v.split(",") if p.strip()]
+            return parts
+        return v
     
     # Sessões
     SESSION_TIMEOUT: int = 3600  # 1 hora em segundos

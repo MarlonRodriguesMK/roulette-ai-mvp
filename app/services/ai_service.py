@@ -6,7 +6,7 @@ from typing import List, Optional, Dict, Any
 import logging
 
 # Importar o motor de IA corrigido
-from app.engines.ai_engine_improved import analyze_data
+from app.engines.ai_engine import analyze_data
 
 
 logger = logging.getLogger(__name__)
@@ -74,7 +74,7 @@ class AIService:
         Útil para insights em tempo real
         """
         try:
-            from app.engines.ai_engine_improved import build_spin_object
+            from app.engines.ai_engine import build_spin_object
             
             spin = build_spin_object(number)
             

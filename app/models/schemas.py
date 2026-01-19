@@ -2,7 +2,7 @@
 # SCHEMAS.PY - Pydantic Models para validação
 # ======================================================
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Dict, Any
 
 
@@ -11,7 +11,8 @@ class SpinInput(BaseModel):
     number: int = Field(..., ge=0, le=36, description="Número sorteado (0-36)")
     history_limit: int = Field(50, ge=10, le=200, description="Limite de histórico")
 
-    @validator('number')
+    @field_validator('number')
+    @classmethod
     def validate_number(cls, v):
         if not isinstance(v, int):
             raise ValueError('Número deve ser inteiro')
@@ -22,10 +23,11 @@ class SpinInput(BaseModel):
 
 class MultipleSpinsInput(BaseModel):
     """Input para adicionar múltiplos spins"""
-    numbers: List[int] = Field(..., min_items=1, description="Lista de números")
+    numbers: List[int] = Field(..., min_length=1, description="Lista de números")
     history_limit: int = Field(50, ge=10, le=200)
 
-    @validator('numbers')
+    @field_validator('numbers')
+    @classmethod
     def validate_numbers(cls, v):
         if not v:
             raise ValueError('Lista de números não pode estar vazia')
@@ -40,9 +42,10 @@ class MultipleSpinsInput(BaseModel):
 class Strategy(BaseModel):
     """Definição de uma estratégia"""
     name: str = Field(..., min_length=1, max_length=100)
-    triggers: List[int] = Field(..., min_items=1)
+    triggers: List[int] = Field(..., min_length=1)
     
-    @validator('triggers')
+    @field_validator('triggers')
+    @classmethod
     def validate_triggers(cls, v):
         invalid = [n for n in v if not (0 <= n <= 36)]
         if invalid:
@@ -52,7 +55,7 @@ class Strategy(BaseModel):
 
 class StrategyInput(BaseModel):
     """Input para análise de estratégias"""
-    strategies: List[Strategy] = Field(..., min_items=1)
+    strategies: List[Strategy] = Field(..., min_length=1)
     history_limit: int = Field(50, ge=10, le=200)
 
 
