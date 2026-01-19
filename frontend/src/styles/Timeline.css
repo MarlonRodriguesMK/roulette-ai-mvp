@@ -1,0 +1,10 @@
+.timeline {
+  display: flex;
+  justify-content: center;
+  gap: 5px;
+}
+.timeline div {
+  background: green;
+  padding: 5px;
+  border-radius: 5px;
+}
