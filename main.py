@@ -16,7 +16,7 @@ from app.models.schemas import (
     AnalysisResponse
 )
 from app.services.ai_service import AIService
-from app.services.ocr_service import OCRService
+# from app.services.ocr_service import OCRService
 from app.core.config import settings
 from app.core.session_manager import SessionManager
 
