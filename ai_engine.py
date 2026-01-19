@@ -1,29 +1,46 @@
 # ===============================
-# ROULETTE AI ENGINE – V2 (Premium)
+# ROULETTE AI ENGINE – V2.1 (Improved)
 # ===============================
-# Objetivos desta versao:
-# 1) "spins" retornando todos os dados por giro (para o frontend abrir detalhes)
-# 2) wheel em loop (precomputos de vizinhos, indices, etc.)
-# 3) Zonas fisicas opcao C: setores classicos (Voisins du Zero / Tiers / Orphelins)
-# 4) Neighbors pressure com 3 vizinhos para cada lado (base roleta fisica)
-# 5) Ausencia avancada + Terminais (analise completa)
-#
-# Observacao:
-# - Mantive as chaves principais do JSON para nao quebrar o frontend:
-#   status, numbers, history, physical_zones, neighbors, horses, absences, strategies, alerts
-# - Acrescentei campos novos (nao obrigatorios) que o frontend pode aproveitar:
-#   spins, stats, terminals
 
 from __future__ import annotations
 
-from collections import Counter
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from collections import Counter, defaultdict
+from dataclasses import dataclass, asdict
+from typing import Dict, List, Optional, Tuple, Any
+from enum import Enum
+
+
+# ======================================================
+# ENUMS PARA MELHOR TYPE SAFETY
+# ======================================================
+
+class Color(str, Enum):
+    RED = "red"
+    BLACK = "black"
+    GREEN = "green"
+
+
+class Parity(str, Enum):
+    EVEN = "even"
+    ODD = "odd"
+
+
+class HighLow(str, Enum):
+    LOW = "low"
+    HIGH = "high"
+
+
+class Sector(str, Enum):
+    VOISINS = "voisins"
+    TIERS = "tiers"
+    ORPHELINS = "orphelins"
+    UNKNOWN = "unknown"
 
 
 # ======================================================
 # MAPA FISICO DA ROLETA EUROPEIA (single zero)
 # ======================================================
+
 ROULETTE_WHEEL: List[int] = [
     0, 32, 15, 19, 4, 21, 2, 25, 17,
     34, 6, 27, 13, 36, 11, 30,
@@ -32,46 +49,84 @@ ROULETTE_WHEEL: List[int] = [
     29, 7, 28, 12, 35, 3, 26
 ]
 
-RED_NUMBERS = {
+RED_NUMBERS = frozenset({  # frozenset é mais eficiente para lookups
     1, 3, 5, 7, 9, 12, 14, 16, 18,
     19, 21, 23, 25, 27, 30, 32, 34, 36
-}
+})
+
 
 # ======================================================
-# SETORES CLASSICOS ("Opcao C")
-# - Voisins du Zero (17 numeros)
-# - Tiers du Cylindre (12 numeros)
-# - Orphelins (8 numeros)
-# Fonte: setores tradicionais da roleta europeia
+# SETORES CLASSICOS
 # ======================================================
-VOISINS_DU_ZERO = {22, 18, 29, 7, 28, 12, 35, 3, 26, 0, 32, 15, 19, 4, 21, 2, 25}
-TIERS_DU_CYLINDRE = {27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33}
-ORPHELINS = {1, 20, 14, 31, 9, 17, 34, 6}
 
-# Sanity: os 3 setores cobrem 37 numeros
-# (algumas representacoes antigas podem variar, mas esta e a mais comum)
+VOISINS_DU_ZERO = frozenset({22, 18, 29, 7, 28, 12, 35, 3, 26, 0, 32, 15, 19, 4, 21, 2, 25})
+TIERS_DU_CYLINDRE = frozenset({27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33})
+ORPHELINS = frozenset({1, 20, 14, 31, 9, 17, 34, 6})
+
+
+# ======================================================
+# DATACLASSES PARA ESTRUTURA DE DADOS
+# ======================================================
+
+@dataclass
+class SpinData:
+    """Dados completos de um giro"""
+    number: int
+    wheel_index: int
+    color: str
+    parity: Optional[str]
+    dozen: Optional[int]
+    column: Optional[int]
+    high_low: Optional[str]
+    terminal: int
+    sector: str
+    neighbors_1: List[int]
+    neighbors_3: List[int]
+
+    def to_dict(self) -> Dict:
+        return asdict(self)
+
+
+@dataclass
+class ZoneAnalysis:
+    """Análise de zona física"""
+    name: str
+    key: str
+    numbers: List[int]
+    hits: int
+    percentage: float
+    status: str
+    explanation: str
+
+    def to_dict(self) -> Dict:
+        return asdict(self)
 
 
 # ======================================================
 # PRECOMPUTOS PARA PERFORMANCE
 # ======================================================
+
 WHEEL_LEN = len(ROULETTE_WHEEL)
 WHEEL_INDEX: Dict[int, int] = {n: i for i, n in enumerate(ROULETTE_WHEEL)}
+VALID_NUMBERS = frozenset(ROULETTE_WHEEL)  # Para validação rápida
 
 
 def _wrap_index(i: int) -> int:
+    """Wrapper circular do índice da roleta"""
     return i % WHEEL_LEN
 
 
 def _neighbors_by_radius(idx: int, radius: int) -> List[int]:
-    # Exclui o proprio numero e retorna (esquerda..direita)
+    """Retorna vizinhos físicos excluindo o número central"""
     left = [ROULETTE_WHEEL[_wrap_index(idx - k)] for k in range(radius, 0, -1)]
     right = [ROULETTE_WHEEL[_wrap_index(idx + k)] for k in range(1, radius + 1)]
     return left + right
 
 
+# Precomputar todos os vizinhos
 NEIGHBORS_1: Dict[int, List[int]] = {}
 NEIGHBORS_3: Dict[int, List[int]] = {}
+
 for n in ROULETTE_WHEEL:
     i = WHEEL_INDEX[n]
     NEIGHBORS_1[n] = _neighbors_by_radius(i, 1)
@@ -83,204 +138,285 @@ for n in ROULETTE_WHEEL:
 # ======================================================
 
 def dozen(number: int) -> Optional[int]:
+    """Retorna a dúzia (1, 2, 3) ou None para zero"""
     if number == 0:
         return None
-    return (number - 1) // 12 + 1  # 1..3
+    return (number - 1) // 12 + 1
 
 
 def column(number: int) -> Optional[int]:
+    """Retorna a coluna (1, 2, 3) ou None para zero"""
     if number == 0:
         return None
-    # colunas no tapete: 1,2,3 (resto 1..3)
     r = number % 3
     return 3 if r == 0 else r
 
 
 def high_low(number: int) -> Optional[str]:
+    """Retorna 'low' (1-18) ou 'high' (19-36) ou None para zero"""
     if number == 0:
         return None
-    return "low" if 1 <= number <= 18 else "high"
+    return HighLow.LOW.value if 1 <= number <= 18 else HighLow.HIGH.value
 
 
 def terminal(number: int) -> int:
+    """Retorna o terminal (último dígito 0-9)"""
     return number % 10
 
 
 def color(number: int) -> str:
+    """Retorna a cor do número"""
     if number == 0:
-        return "green"
-    return "red" if number in RED_NUMBERS else "black"
+        return Color.GREEN.value
+    return Color.RED.value if number in RED_NUMBERS else Color.BLACK.value
 
 
 def parity(number: int) -> Optional[str]:
+    """Retorna paridade (even/odd) ou None para zero"""
     if number == 0:
         return None
-    return "even" if number % 2 == 0 else "odd"
+    return Parity.EVEN.value if number % 2 == 0 else Parity.ODD.value
 
 
 def sector_membership(number: int) -> str:
+    """Retorna o setor físico do número"""
     if number in VOISINS_DU_ZERO:
-        return "voisins"
+        return Sector.VOISINS.value
     if number in TIERS_DU_CYLINDRE:
-        return "tiers"
+        return Sector.TIERS.value
     if number in ORPHELINS:
-        return "orphelins"
-    # Em teoria nao acontece
-    return "unknown"
+        return Sector.ORPHELINS.value
+    return Sector.UNKNOWN.value
 
 
 # ======================================================
-# FUNCAO: CRIA OBJETO COMPLETO DE CADA GIRO
+# VALIDAÇÃO DE ENTRADA
 # ======================================================
 
-def build_spin_object(number: int) -> Dict:
+def validate_numbers(data: List[int]) -> Tuple[List[int], List[str]]:
+    """
+    Valida e filtra números de entrada
+    Retorna: (números válidos, lista de erros)
+    """
+    valid_nums = []
+    errors = []
+    
+    for i, num in enumerate(data):
+        if not isinstance(num, int):
+            errors.append(f"Posição {i}: valor '{num}' não é inteiro")
+            continue
+        
+        if num not in VALID_NUMBERS:
+            errors.append(f"Posição {i}: número {num} inválido (deve ser 0-36)")
+            continue
+        
+        valid_nums.append(num)
+    
+    return valid_nums, errors
+
+
+# ======================================================
+# CONSTRUÇÃO DE OBJETOS DE GIRO
+# ======================================================
+
+def build_spin_object(number: int) -> SpinData:
+    """Cria objeto completo de dados do giro"""
     idx = WHEEL_INDEX[number]
-    return {
-        "number": number,
-        "wheel_index": idx,
-        "color": color(number),
-        "parity": parity(number),
-        "dozen": dozen(number),
-        "column": column(number),
-        "high_low": high_low(number),
-        "terminal": terminal(number),
-        "sector": sector_membership(number),
-        # vizinhos fisicos
-        "neighbors_1": NEIGHBORS_1[number],
-        "neighbors_3": NEIGHBORS_3[number],
-    }
+    
+    spin = SpinData(
+        number=number,
+        wheel_index=idx,
+        color=color(number),
+        parity=parity(number),
+        dozen=dozen(number),
+        column=column(number),
+        high_low=high_low(number),
+        terminal=terminal(number),
+        sector=sector_membership(number),
+        neighbors_1=NEIGHBORS_1[number],
+        neighbors_3=NEIGHBORS_3[number],
+    )
+    
+    return spin
 
 
 # ======================================================
-# ZONAS FISICAS (Opcao C - setores classicos)
+# ZONAS FISICAS
 # ======================================================
 
 def _zone_status_from_hits(hits: int, max_hits: int, min_hits: int) -> Tuple[str, str]:
+    """Determina status e explicação baseado nos hits"""
     if max_hits > 0 and hits == max_hits:
-        return "🔥 Quente", "Zona com maior recorrencia recente na roleta fisica"
+        return "🔥 Quente", "Zona com maior recorrência recente na roleta física"
     if hits == min_hits:
-        return "❄️ Fria", "Zona com baixa incidencia recente, indicando possivel ausencia"
+        return "❄️ Fria", "Zona com baixa incidência recente, indicando possível ausência"
     return "Neutra", "Zona com comportamento estatisticamente equilibrado"
 
 
 def calculate_physical_zones(history: List[int]) -> List[Dict]:
+    """Calcula análise de zonas físicas (setores clássicos)"""
     total = len(history)
-    zones = [
+    if total == 0:
+        return []
+    
+    zones_config = [
         {
             "name": "Voisins du Zero",
-            "key": "voisins",
-            "numbers": sorted(VOISINS_DU_ZERO, key=lambda x: WHEEL_INDEX.get(x, 999)),
+            "key": Sector.VOISINS.value,
+            "numbers_set": VOISINS_DU_ZERO,
         },
         {
             "name": "Tiers du Cylindre",
-            "key": "tiers",
-            "numbers": sorted(TIERS_DU_CYLINDRE, key=lambda x: WHEEL_INDEX.get(x, 999)),
+            "key": Sector.TIERS.value,
+            "numbers_set": TIERS_DU_CYLINDRE,
         },
         {
             "name": "Orphelins",
-            "key": "orphelins",
-            "numbers": sorted(ORPHELINS, key=lambda x: WHEEL_INDEX.get(x, 999)),
+            "key": Sector.ORPHELINS.value,
+            "numbers_set": ORPHELINS,
         },
     ]
-
-    for z in zones:
-        nums = set(z["numbers"])
-        hits = sum(1 for n in history if n in nums)
-        z["hits"] = hits
-        z["percentage"] = round((hits / total) * 100, 2) if total else 0.0
-
+    
+    zones = []
+    for config in zones_config:
+        nums_set = config["numbers_set"]
+        hits = sum(1 for n in history if n in nums_set)
+        
+        zone = {
+            "name": config["name"],
+            "key": config["key"],
+            "numbers": sorted(nums_set, key=lambda x: WHEEL_INDEX[x]),
+            "hits": hits,
+            "percentage": round((hits / total) * 100, 2),
+        }
+        zones.append(zone)
+    
+    # Determinar status
     max_hits = max((z["hits"] for z in zones), default=0)
     min_hits = min((z["hits"] for z in zones), default=0)
+    
     for z in zones:
         status, explanation = _zone_status_from_hits(z["hits"], max_hits, min_hits)
         z["status"] = status
         z["explanation"] = explanation
-
+    
     return zones
 
 
 # ======================================================
-# NEIGHBORS PRESSURE (3 vizinhos para cada lado)
+# NEIGHBORS PRESSURE
 # ======================================================
 
 def calculate_neighbors(history: List[int], radius: int = 3) -> List[Dict]:
-    # radius fixado em 3 por padrao (pedido)
-    # Pressao = quantas vezes um numero apareceu como vizinho fisico dos giros
-    pressure = Counter()
+    """
+    Calcula pressão de vizinhos (quantas vezes cada número apareceu
+    como vizinho físico dos números sorteados)
+    """
+    pressure: Counter = Counter()
+    
+    neighbors_map = NEIGHBORS_3 if radius == 3 else None
+    
     for num in history:
-        if num in WHEEL_INDEX:
-            neigh = NEIGHBORS_3[num] if radius == 3 else _neighbors_by_radius(WHEEL_INDEX[num], radius)
-            for n in neigh:
-                pressure[n] += 1
-
-    return [{"number": n, "pressure": p} for n, p in pressure.most_common()]
+        if num not in WHEEL_INDEX:
+            continue
+        
+        # Usar precomputado se disponível
+        if neighbors_map and num in neighbors_map:
+            neigh = neighbors_map[num]
+        else:
+            idx = WHEEL_INDEX[num]
+            neigh = _neighbors_by_radius(idx, radius)
+        
+        for n in neigh:
+            pressure[n] += 1
+    
+    return [
+        {"number": n, "pressure": p}
+        for n, p in pressure.most_common()
+    ]
 
 
 # ======================================================
-# CAVALOS (OPOSICAO FISICA)
+# CAVALOS (OPOSIÇÃO FÍSICA)
 # ======================================================
 
 def calculate_horses() -> List[Dict]:
+    """Calcula pares de cavalos (números opostos na roleta)"""
     horses: List[Dict] = []
     half = WHEEL_LEN // 2
+    
     for i in range(half):
-        horses.append({"pair": [ROULETTE_WHEEL[i], ROULETTE_WHEEL[i + half]]})
+        horses.append({
+            "pair": [ROULETTE_WHEEL[i], ROULETTE_WHEEL[i + half]]
+        })
+    
     return horses
 
 
 # ======================================================
-# TERMINAIS (analise)
+# TERMINAIS
 # ======================================================
 
 def calculate_terminals(history: List[int], max_spins: int = 50) -> Dict:
+    """Análise completa de terminais (último dígito)"""
     last_spins = history[-max_spins:]
-    totals = len(last_spins)
-
-    # Terminal = ultimo digito (0..9)
-    t_counts = Counter(terminal(n) for n in last_spins)
-
-    # Ausencia por terminal = quantos giros desde a ultima ocorrencia daquele terminal
-    # Se nunca ocorreu na janela, ausencia = totals
-    t_last_seen: Dict[int, int] = {t: None for t in range(10)}  # type: ignore
+    total = len(last_spins)
+    
+    if total == 0:
+        return {
+            "window": 0,
+            "counts": {},
+            "detail": [],
+            "top": [],
+            "cold": [],
+        }
+    
+    # Contagem de terminais
+    t_counts: Counter = Counter(terminal(n) for n in last_spins)
+    
+    # Calcular ausência (giros desde última aparição)
+    t_last_seen: Dict[int, Optional[int]] = {t: None for t in range(10)}
+    
     for i, n in enumerate(last_spins):
         t_last_seen[terminal(n)] = i
-
-    t_absence = {}
+    
+    t_absence: Dict[int, int] = {}
     for t in range(10):
         last_i = t_last_seen[t]
         if last_i is None:
-            t_absence[t] = totals
+            t_absence[t] = total
         else:
-            t_absence[t] = (totals - 1) - last_i
-
-    # Ranking quente/frio por contagem
-    ranked = sorted(t_counts.items(), key=lambda kv: kv[1], reverse=True)
-    max_hits = ranked[0][1] if ranked else 0
-    min_hits = min((v for _, v in ranked), default=0)
-
-    def _status(v: int) -> str:
-        if v == max_hits and max_hits > 0:
+            t_absence[t] = (total - 1) - last_i
+    
+    # Determinar status
+    max_hits = max(t_counts.values()) if t_counts else 0
+    min_hits = min(t_counts.values()) if t_counts else 0
+    
+    def _status(hits: int) -> str:
+        if hits == max_hits and max_hits > 0:
             return "🔥 Quente"
-        if v == min_hits:
+        if hits == min_hits:
             return "❄️ Frio"
         return "Neutro"
-
+    
+    # Detalhes por terminal
     terminals_detail = [
         {
             "terminal": t,
             "hits": t_counts.get(t, 0),
-            "percentage": round((t_counts.get(t, 0) / totals) * 100, 2) if totals else 0.0,
-            "absence": t_absence.get(t, totals),
+            "percentage": round((t_counts.get(t, 0) / total) * 100, 2),
+            "absence": t_absence.get(t, total),
             "status": _status(t_counts.get(t, 0)),
         }
         for t in range(10)
     ]
-
+    
+    # Top 3 quentes e frios
     top = sorted(terminals_detail, key=lambda x: x["hits"], reverse=True)[:3]
     cold = sorted(terminals_detail, key=lambda x: (x["hits"], -x["absence"]))[:3]
-
+    
     return {
-        "window": min(max_spins, len(history)),
+        "window": total,
         "counts": {str(k): v for k, v in t_counts.items()},
         "detail": terminals_detail,
         "top": top,
@@ -289,28 +425,32 @@ def calculate_terminals(history: List[int], max_spins: int = 50) -> Dict:
 
 
 # ======================================================
-# AUSENCIAS (numeros, zonas, cavalos, terminais)
+# AUSÊNCIAS
 # ======================================================
 
 def calculate_absences(history: List[int], max_spins: int = 50) -> Dict:
+    """Calcula números, zonas, cavalos e terminais ausentes"""
     last_spins = history[-max_spins:]
-
-    # Numeros ausentes
-    absent_numbers = [n for n in ROULETTE_WHEEL if n not in set(last_spins)]
-
-    # Zonas ausentes (setores C)
+    last_set = frozenset(last_spins)
+    
+    # Números ausentes
+    absent_numbers = [n for n in ROULETTE_WHEEL if n not in last_set]
+    
+    # Zonas ausentes
     zones = calculate_physical_zones(last_spins)
     absent_zones = [z for z in zones if z.get("hits", 0) == 0]
-
-    # Cavalos ausentes (nenhum dos dois numeros apareceu)
+    
+    # Cavalos ausentes (nenhum dos dois números apareceu)
     horses = calculate_horses()
-    last_set = set(last_spins)
-    absent_horses = [h for h in horses if not any(n in last_set for n in h["pair"]) ]
-
-    # Terminais ausentes (na janela)
-    t_counts = Counter(terminal(n) for n in last_spins)
-    absent_terminals = [t for t in range(10) if t_counts.get(t, 0) == 0]
-
+    absent_horses = [
+        h for h in horses 
+        if not any(n in last_set for n in h["pair"])
+    ]
+    
+    # Terminais ausentes
+    t_counts: Counter = Counter(terminal(n) for n in last_spins)
+    absent_terminals = [t for t in range(10) if t not in t_counts]
+    
     return {
         "numbers": absent_numbers,
         "zones": absent_zones,
@@ -320,63 +460,88 @@ def calculate_absences(history: List[int], max_spins: int = 50) -> Dict:
 
 
 # ======================================================
-# ESTRATEGIAS PREMIUM (mantive, com robustez)
+# ESTRATÉGIAS PREMIUM
 # ======================================================
 
-def analyze_premium_strategies(history: List[int], user_strategies: List[Dict]) -> List[Dict]:
+def analyze_premium_strategies(
+    history: List[int], 
+    user_strategies: Optional[List[Dict]] = None
+) -> List[Dict]:
+    """Analisa estratégias customizadas do usuário"""
+    if not user_strategies:
+        return []
+    
     results: List[Dict] = []
-
-    for strat in user_strategies or []:
+    
+    for strat in user_strategies:
         name = strat.get("name", "Strategy")
-        triggers = [t for t in strat.get("triggers", []) if t in WHEEL_INDEX]
-
+        triggers = [
+            t for t in strat.get("triggers", []) 
+            if isinstance(t, int) and t in WHEEL_INDEX
+        ]
+        
+        if not triggers:
+            continue
+        
         stats = {
             "hits": 0,
             "misses": 0,
             "details": [],
         }
-
-        # Vizinhos 1 (imediatos) dos gatilhos
+        
+        # Vizinhos imediatos dos gatilhos
         trigger_neighbors = set()
         for t in triggers:
-            for n in NEIGHBORS_1[t]:
-                trigger_neighbors.add(n)
-
+            trigger_neighbors.update(NEIGHBORS_1[t])
+        
         for number in history:
             is_trigger = number in triggers
             is_neighbor = number in trigger_neighbors
-
+            
             if is_trigger or is_neighbor:
                 stats["hits"] += 1
-                stats["details"].append({"number": number, "status": "hit", "reason": "trigger" if is_trigger else "neighbor"})
+                stats["details"].append({
+                    "number": number,
+                    "status": "hit",
+                    "reason": "trigger" if is_trigger else "neighbor"
+                })
             else:
                 stats["misses"] += 1
-                stats["details"].append({"number": number, "status": "miss"})
-
-        results.append({"name": name, "triggers": triggers, "stats": stats})
-
+                stats["details"].append({
+                    "number": number,
+                    "status": "miss"
+                })
+        
+        results.append({
+            "name": name,
+            "triggers": triggers,
+            "stats": stats
+        })
+    
     return results
 
 
 # ======================================================
-# STATS GERAIS (para frontend explicar melhor)
+# ESTATÍSTICAS GERAIS
 # ======================================================
 
-def calculate_stats(history: List[int]) -> Dict:
+def calculate_stats(history: List[int]) -> Dict[str, Any]:
+    """Calcula estatísticas gerais da sessão"""
     if not history:
         return {}
-
-    c = Counter(history)
+    
+    c: Counter = Counter(history)
     total = len(history)
-
-    by_color = Counter(color(n) for n in history)
-    by_parity = Counter(parity(n) or "none" for n in history)
-    by_dozen = Counter(str(dozen(n) or "none") for n in history)
-    by_column = Counter(str(column(n) or "none") for n in history)
-    by_highlow = Counter(high_low(n) or "none" for n in history)
-
-    hottest_num, hottest_hits = c.most_common(1)[0]
-
+    
+    # Agregações
+    by_color: Counter = Counter(color(n) for n in history)
+    by_parity: Counter = Counter(parity(n) or "none" for n in history)
+    by_dozen: Counter = Counter(str(dozen(n) or "none") for n in history)
+    by_column: Counter = Counter(str(column(n) or "none") for n in history)
+    by_highlow: Counter = Counter(high_low(n) or "none" for n in history)
+    
+    hottest_num, hottest_hits = c.most_common(1)[0] if c else (None, 0)
+    
     return {
         "total_spins": total,
         "hottest_number": hottest_num,
@@ -393,52 +558,100 @@ def calculate_stats(history: List[int]) -> Dict:
 # MOTOR PRINCIPAL
 # ======================================================
 
-def analyze_data(data: List[int], history_limit: int = 50, user_strategies: Optional[List[Dict]] = None) -> Dict:
+def analyze_data(
+    data: List[int],
+    history_limit: int = 50,
+    user_strategies: Optional[List[Dict]] = None
+) -> Dict[str, Any]:
+    """
+    Motor principal de análise
+    
+    Args:
+        data: Lista de números sorteados
+        history_limit: Limite de histórico a considerar
+        user_strategies: Estratégias customizadas do usuário
+    
+    Returns:
+        Dicionário com análise completa
+    """
+    # Validação
     if not data:
-        return {"status": "no_data", "message": "Nenhum numero recebido"}
-
-    # Filtra apenas numeros validos para evitar quebra
-    valid = [n for n in data if isinstance(n, int) and n in WHEEL_INDEX]
+        return {
+            "status": "no_data",
+            "message": "Nenhum número recebido",
+            "errors": []
+        }
+    
+    valid, errors = validate_numbers(data)
+    
     if not valid:
-        return {"status": "no_data", "message": "Nenhum numero valido recebido"}
-
+        return {
+            "status": "invalid_data",
+            "message": "Nenhum número válido recebido",
+            "errors": errors
+        }
+    
+    # Limitar histórico
     history = valid[-history_limit:]
-
-    # Spins completos
+    
+    # Construir objetos de giro
     spins = [build_spin_object(n) for n in history]
     last_spin = spins[-1] if spins else None
-
-    # Contagem
-    count = Counter(history)
-
+    
+    # Contagem de números
+    count: Counter = Counter(history)
+    
+    # Análise completa
     analysis = {
         "status": "ok",
         "numbers": dict(count),
         "history": history,
-        # novo (para o frontend abrir detalhes por giro)
-        "spins": spins,
-        "last_spin": last_spin,
-
-        # zonas fisicas (Opcao C)
+        
+        # Dados detalhados dos giros
+        "spins": [s.to_dict() for s in spins],
+        "last_spin": last_spin.to_dict() if last_spin else None,
+        
+        # Análises específicas
         "physical_zones": calculate_physical_zones(history),
-
-        # neighbors pressure (3 vizinhos por lado)
         "neighbors": calculate_neighbors(history, radius=3),
-
         "horses": calculate_horses(),
-
-        # ausencias + terminais
         "absences": calculate_absences(history, max_spins=history_limit),
         "terminals": calculate_terminals(history, max_spins=history_limit),
-
-        # extras para explicacoes
         "stats": calculate_stats(history),
-
-        "strategies": [],
+        
+        # Estratégias e alertas
+        "strategies": analyze_premium_strategies(history, user_strategies),
         "alerts": [],
+        
+        # Metadados
+        "errors": errors if errors else [],
+        "valid_count": len(valid),
+        "invalid_count": len(data) - len(valid),
     }
-
-    if user_strategies:
-        analysis["strategies"] = analyze_premium_strategies(history, user_strategies)
-
+    
     return analysis
+
+
+# ======================================================
+# FUNÇÕES DE UTILIDADE PARA TESTES
+# ======================================================
+
+def get_sector_numbers(sector: str) -> frozenset:
+    """Retorna os números de um setor específico"""
+    sector_map = {
+        "voisins": VOISINS_DU_ZERO,
+        "tiers": TIERS_DU_CYLINDRE,
+        "orphelins": ORPHELINS,
+    }
+    return sector_map.get(sector.lower(), frozenset())
+
+
+def get_numbers_by_color(color_name: str) -> frozenset:
+    """Retorna números de uma cor específica"""
+    if color_name.lower() == "red":
+        return RED_NUMBERS
+    elif color_name.lower() == "black":
+        return frozenset(n for n in range(1, 37) if n not in RED_NUMBERS)
+    elif color_name.lower() == "green":
+        return frozenset({0})
+    return frozenset()

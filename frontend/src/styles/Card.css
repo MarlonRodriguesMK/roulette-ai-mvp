@@ -1,0 +1,7 @@
+.card {
+  background: #1a1a1a;
+  border-radius: 12px;
+  padding: 10px;
+  min-width: 160px;
+}
+.card h3 { color: gold; }
