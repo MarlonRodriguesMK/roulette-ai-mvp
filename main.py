@@ -16,7 +16,6 @@ from app.models.schemas import (
     AnalysisResponse
 )
 from app.services.ai_service import AIService
-# from app.services.ocr_service import OCRService
 from app.core.config import settings
 from app.core.session_manager import SessionManager
 
@@ -65,7 +64,12 @@ app.add_middleware(
 # DEPENDÊNCIAS
 # ======================================================
 ai_service = AIService()
-ocr_service = OCRService()
+import os
+ocr_service = None
+
+if os.getenv("OCR_ENABLED", "false").lower() == "true":
+    from app.services.ocr_service import OCRService
+    ocr_service = OCRService()
 
 def get_session_id(session_id: Optional[str] = None) -> str:
     """Obtém ou cria um session_id"""
@@ -228,64 +232,6 @@ async def get_analysis(
 # ======================================================
 # ROTAS - OCR
 # ======================================================
-@app.post("/api/v1/ocr-upload", response_model=AnalysisResponse)
-async def ocr_upload(
-    file: UploadFile = File(...),
-    session_id: str = Depends(get_session_id),
-    history_limit: int = 50
-):
-    """
-    Upload de imagem para extração OCR de números
-    """
-    try:
-        # Validar tipo de arquivo
-        if not file.content_type.startswith('image/'):
-            raise HTTPException(
-                status_code=400,
-                detail="Arquivo deve ser uma imagem"
-            )
-        
-        # Ler imagem
-        image_bytes = await file.read()
-        
-        # Processar OCR
-        numbers = ocr_service.process_image(image_bytes)
-        
-        if not numbers:
-            return {
-                "status": "no_numbers",
-                "message": "Nenhum número foi detectado na imagem",
-                "extracted": []
-            }
-        
-        # Adicionar ao histórico
-        for number in numbers:
-            session_manager.add_spin(session_id, number)
-        
-        # Obter histórico
-        history = session_manager.get_history(session_id, limit=history_limit)
-        
-        # Analisar
-        analysis = ai_service.analyze(
-            history=history,
-            history_limit=history_limit
-        )
-        
-        return AnalysisResponse(
-            status="ok",
-            session_id=session_id,
-            data=analysis,
-            extracted_numbers=numbers
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Erro em ocr_upload: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro ao processar imagem: {str(e)}"
-        )
 
 # ======================================================
 # ROTAS - ESTRATÉGIAS
